@@ -162,7 +162,20 @@ fi
 passo "8/9 Serviço (liga sozinho) e HTTPS"
 IP=$(curl -fsS https://api.ipify.org || curl -fsS https://ifconfig.me || echo "")
 HOST=${DOMINIO:-${IP//./-}.sslip.io}
-cat > /etc/caddy/Caddyfile <<EOF
+# a máquina pode ter outros programas (ex.: o editor de PDF): cada um grava o seu endereço em /etc/caddy/sites
+# e o Caddyfile só importa essa pasta, para um instalador não apagar o site do outro
+SITES=/etc/caddy/sites
+IMPORTAR="import $SITES/*.caddy"
+mkdir -p "$SITES"
+if ! grep -qxF "$IMPORTAR" /etc/caddy/Caddyfile 2>/dev/null; then
+  [ -s /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.antes-$(date +%Y%m%d-%H%M%S)"
+  # um Caddyfile antigo que não seja do BRUNEDITOR nem a página padrão do Caddy (ex.: o site do PDF) é guardado
+  if [ -s /etc/caddy/Caddyfile ] && ! grep -q '/usr/share/caddy' /etc/caddy/Caddyfile && ! grep -q '127.0.0.1:5005' /etc/caddy/Caddyfile; then
+    [ -e "$SITES/anterior.caddy" ] || cp /etc/caddy/Caddyfile "$SITES/anterior.caddy"
+  fi
+  printf '# Cada programa desta máquina tem o seu endereço num arquivo em %s\n%s\n' "$SITES" "$IMPORTAR" > /etc/caddy/Caddyfile
+fi
+cat > "$SITES/bruneditor.caddy" <<EOF
 $HOST {
 	encode zstd gzip
 	request_body {
@@ -199,7 +212,13 @@ if [ -d /run/systemd/system ]; then
   systemctl daemon-reload
   systemctl enable --now bruneditor >/dev/null 2>&1
   systemctl restart bruneditor
-  systemctl enable caddy >/dev/null 2>&1 && systemctl restart caddy
+  systemctl enable caddy >/dev/null 2>&1
+  # recarrega sem derrubar os outros sites da máquina (se a configuração estiver errada, nada muda)
+  if caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+    systemctl reload caddy || systemctl restart caddy
+  else
+    aviso "(configuração do Caddy com erro: rode  caddy validate --config /etc/caddy/Caddyfile)"
+  fi
 else
   aviso "(sem systemd aqui: o serviço foi criado mas não ligado)"
 fi
