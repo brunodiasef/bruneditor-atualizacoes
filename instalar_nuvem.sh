@@ -13,7 +13,7 @@
 # Variáveis opcionais (para instalar sem perguntas):
 #   BRUNEDITOR_SENHA=...      senha de entrada (mínimo 10 caracteres)
 #   GROQ_CHAVE=...            chave do Groq (gsk_...); "nenhuma" = transcrever só no servidor
-#   DOMINIO=...               endereço próprio (sem ele: <ip>.sslip.io, que já aponta para este servidor)
+#   DOMINIO=...               endereço próprio, guardado em /opt/bruneditor/dominio para as próximas vezes (sem ele: <ip>.sslip.io)
 #   PACOTE_LOCAL=/caminho.zip instala um pacote local em vez do último Release (para testes)
 # =============================================================================================================
 set -euo pipefail
@@ -161,7 +161,27 @@ fi
 
 passo "8/9 Serviço (liga sozinho) e HTTPS"
 IP=$(curl -fsS https://api.ipify.org || curl -fsS https://ifconfig.me || echo "")
-HOST=${DOMINIO:-${IP//./-}.sslip.io}
+SSLIP=${IP//./-}.sslip.io
+# endereço próprio: o DOMINIO=... desta vez, senão o guardado numa instalação anterior, senão o que já estiver
+# no bruneditor.caddy (servidor configurado à mão); fica guardado para rodar de novo sem voltar só ao sslip.io
+ARQ_DOMINIO=$PASTA/dominio
+DOMINIO=${DOMINIO:-}
+if [ -z "${DOMINIO:-}" ] && [ -s "$ARQ_DOMINIO" ]; then
+  DOMINIO=$(tr -d ' \r\n' < "$ARQ_DOMINIO")
+fi
+if [ -z "${DOMINIO:-}" ] && [ -s /etc/caddy/sites/bruneditor.caddy ]; then
+  DOMINIO=$(head -1 /etc/caddy/sites/bruneditor.caddy | tr -d '{' | tr ',' '\n' | tr -d ' \t' | grep -v '^$' | grep -v 'sslip\.io$' | head -1 || true)
+fi
+DOMINIO=${DOMINIO#https://}; DOMINIO=${DOMINIO#http://}; DOMINIO=${DOMINIO%%/*}
+if [ -n "$DOMINIO" ]; then
+  echo "$DOMINIO" > "$ARQ_DOMINIO"
+  HOST=$DOMINIO
+  ENDERECOS="$DOMINIO"
+  [ -n "$IP" ] && [ "$DOMINIO" != "$SSLIP" ] && ENDERECOS="$DOMINIO, $SSLIP"
+else
+  HOST=$SSLIP
+  ENDERECOS=$SSLIP
+fi
 # a máquina pode ter outros programas (ex.: o editor de PDF): cada um grava o seu endereço em /etc/caddy/sites
 # e o Caddyfile só importa essa pasta, para um instalador não apagar o site do outro
 SITES=/etc/caddy/sites
@@ -176,7 +196,7 @@ if ! grep -qxF "$IMPORTAR" /etc/caddy/Caddyfile 2>/dev/null; then
   printf '# Cada programa desta máquina tem o seu endereço num arquivo em %s\n%s\n' "$SITES" "$IMPORTAR" > /etc/caddy/Caddyfile
 fi
 cat > "$SITES/bruneditor.caddy" <<EOF
-$HOST {
+$ENDERECOS {
 	encode zstd gzip
 	request_body {
 		max_size 8GB
@@ -238,6 +258,7 @@ echo "==========================================================================
 echo " BRUNEDITOR instalado. Abra no navegador (computador ou celular):"
 echo
 echo "     https://$HOST"
+[ "$HOST" != "$SSLIP" ] && [ -n "$IP" ] && echo "     (reserva: https://$SSLIP)"
 echo
 echo " Se não abrir: confira se as portas 80 e 443 estão liberadas na Oracle (Lista de Segurança da VCN)."
 echo " Ver o que está acontecendo:  sudo journalctl -u bruneditor -f"
